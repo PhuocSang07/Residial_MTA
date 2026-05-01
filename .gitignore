@@ -1,0 +1,35 @@
+# local Python environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# large archives (add local copies if needed)
+*.zip
+
+# model weights
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# tools / run artifacts
+.wandb/
+wandb/
+*.log
+*.wandb
+nohup.out
+.DS_Store
+
+# large data files
+*.arrow
+*.parquet
