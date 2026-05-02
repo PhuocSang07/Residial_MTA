@@ -2,7 +2,7 @@
 .venv/
 venv/
 env/
-
+hf_model_sync.ipynb
 # Python
 __pycache__/
 *.py[cod]

@@ -8,10 +8,8 @@ _REPO_ROOT = str(Path(__file__).parent.parent.parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# Default: dolly jsonl nằm trong distillm-master, có thể override bằng env var DOLLY_DATA_DIR
-_DEFAULT_DATA_DIR = os.path.join(
-    _REPO_ROOT, "..", "MTA", "distillm-master", "processed_data", "dolly", "full", "gpt2"
-)
+# Default: dolly jsonl nằm trong data/dolly/ của repo, có thể override bằng env var DOLLY_DATA_DIR
+_DEFAULT_DATA_DIR = os.path.join(_REPO_ROOT, "data", "dolly")
 DOLLY_DATA_DIR = os.environ.get("DOLLY_DATA_DIR", _DEFAULT_DATA_DIR)
 
 _SPLIT_FILE = {

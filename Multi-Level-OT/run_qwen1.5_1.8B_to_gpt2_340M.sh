@@ -2,46 +2,62 @@
 # Distill VoCuc/Qwen1.5_1.8B_SFT_Dolly (teacher, 2048-dim, 24 layers)
 #        → openai-community/gpt2-medium (student, 1024-dim, 24 layers)
 # MultiLevelOT (cross-tokenizer) + MTA Span + Entropy Weight
-#
-# Hyperparameters theo paper (AAAI 2025):
-#   lr=1e-6, distil_factor=0.15 (α), f=1 (sequence-level ranking + top-50)
-#
-# Layer mapping (6 pairs, split_layer_mapping "0,1,6"):
-#   MTA-style: last 6 layers step=2 (both 24L → 1:1) — mirrors MTA Qwen1.5 exactly
-#   Word spans  (lower):  student 14 ↔ teacher 14
-#   Phrase spans (higher): student 16,18,20,22,24 ↔ teacher 16,18,20,22,24
 
-export CUDA_VISIBLE_DEVICES=0
-export DS_IGNORE_CUDA_DETECTION=1
+# Student on GPU 0, teacher on GPU 1
+GPUS=(0 1 2 3 4 5 6 7)
+export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
+export TOKENIZERS_PARALLELISM=false
+
+MASTER_ADDR=localhost
+MASTER_PORT=66$(($RANDOM%90+10))
+NNODES=1
+NODE_RANK=0
+GPUS_PER_NODE=${#GPUS[@]}
+
+DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
+                  --nnodes $NNODES \
+                  --node_rank $NODE_RANK \
+                  --master_addr $MASTER_ADDR \
+                  --master_port $MASTER_PORT"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Dolly data: train.jsonl / valid.jsonl từ distillm-master
-export DOLLY_DATA_DIR="$SCRIPT_DIR/../MTA/distillm-master/processed_data/dolly/full/gpt2"
+OPTS=""
+OPTS+=" --model_name openai-community/gpt2-medium"
+OPTS+=" --dataset.file $SCRIPT_DIR/llm_distillation/datasets/loader/dolly.py"
+OPTS+=" --lr 5e-4"
+OPTS+=" --num_epochs 10"
+OPTS+=" --batch_size_training 2"
+OPTS+=" --gradient_accumulation_steps 1"
+OPTS+=" --val_batch_size 8"
+OPTS+=" --output_dir $SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-340M"
+OPTS+=" --distillation"
+OPTS+=" --distillation_config_model_name VoCuc/Qwen1.5_1.8B_SFT_Dolly"
+OPTS+=" --distillation_config_distil_factor 0.15"
+OPTS+=" --distillation_config_cross_entropy_factor 1.0"
+OPTS+=" --distillation_config_student_temperature 1.0"
+OPTS+=" --distillation_config_teacher_temperature 2.0"
+OPTS+=" --distillation_config_pure_bf16"
+OPTS+=" --student_device cuda:0"
+OPTS+=" --teacher_device cuda:1"
+OPTS+=" --save_step 2500"
+OPTS+=" --f 1"
+OPTS+=" --span_loss_weight 2.0"
+OPTS+=" --entropy_weight"
+OPTS+=" --student_layer_mapping 14,16,18,20,22,24"
+OPTS+=" --teacher_layer_mapping 14,16,18,20,22,24"
+OPTS+=" --split_layer_mapping 0,1,6"
+OPTS+=" --use_phrase_spans"
+OPTS+=" --context_length 1024"
+OPTS+=" --student_hidden_size 1024"
+OPTS+=" --teacher_hidden_size 2048"
 
-python finetuning.py \
-  --model_name openai-community/gpt2-medium \
-  --dataset.file "$SCRIPT_DIR/llm_distillation/datasets/loader/dolly.py" \
-  --lr 5e-4 \
-  --num_epochs 20 \
-  --batch_size_training 4 \
-  --val_batch_size 8 \
-  --gradient_accumulation_steps 2 \
-  --output_dir "$SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-340M" \
-  --distillation \
-  --distillation_config_model_name VoCuc/Qwen1.5_1.8B_SFT_Dolly \
-  --distillation_config_distil_factor 0.15 \
-  --distillation_config_cross_entropy_factor 1.0 \
-  --distillation_config_student_temperature 1.0 \
-  --distillation_config_teacher_temperature 2.0 \
-  --save_step 4500 \
-  --f 1 \
-  --span_loss_weight 0.1 \
-  --entropy_weight \
-  --student_layer_mapping "14,16,18,20,22,24" \
-  --teacher_layer_mapping "14,16,18,20,22,24" \
-  --split_layer_mapping "0,1,6" \
-  --use_phrase_spans \
-  --context_length 1024 \
-  --student_hidden_size 1024 \
-  --teacher_hidden_size 2048
+export NCCL_DEBUG=""
+export WANDB_DISABLED=False
+export TF_CPP_MIN_LOG_LEVEL=3
+export PYTHONPATH=$SCRIPT_DIR
+
+CMD="torchrun ${DISTRIBUTED_ARGS} $SCRIPT_DIR/finetuning.py ${OPTS} $@"
+echo ${CMD}
+mkdir -p $SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-340M
+${CMD}

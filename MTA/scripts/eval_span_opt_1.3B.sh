@@ -22,7 +22,7 @@ OPTS+=" --student_encoder_layers_finetuned 22"
 OPTS+=" --val_batch_size 64"
 
 # devices
-OPTS+=" --student_device cuda:0"
+OPTS+=" --student_device cuda:1"
 
 # models
 OPTS+=" --output_dir ${OUTPUT_DIR}"

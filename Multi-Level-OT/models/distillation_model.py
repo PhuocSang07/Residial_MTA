@@ -108,23 +108,123 @@ def greedy_algorithm_adjust_s(t, s):
 
     return s_adjusted
 
-class DistillationModel(nn.Module):
-    def __init__(self, student, teacher, teacher_tokenizer, student_tokenizer, use_span_loss=False):
+class TeacherWrapper:
+    """
+    MTA-style teacher wrapper.
+    decode() tự move inputs lên teacher_device (giống Teacher.decode() trong MTA).
+    """
+    def __init__(self, model, device):
+        self.model = model.eval()
+        # "auto" là loading param của HF, không phải tensor device —
+        # resolve về device của parameter đầu tiên (thường là embedding layer)
+        if isinstance(device, str) and device == "auto":
+            self.device = next(model.parameters()).device
+        else:
+            self.device = device
+
+    @property
+    def name_or_path(self):
+        return getattr(self.model.config, 'name_or_path',
+                       getattr(self.model.config, '_name_or_path', ''))
+
+    def decode(self, inputs, output_hidden_states=False):
+        # Giống MTA teacher_llm.py: mỗi model tự move inputs vào device của nó
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with torch.no_grad():
+            return self.model(**inputs, output_hidden_states=output_hidden_states)
+
+
+class StudentWrapper(nn.Module):
+    """
+    MTA-style student wrapper.
+    forward() tự move inputs lên student_device (giống LLMModel.forward() trong MTA).
+    """
+    def __init__(self, model, device):
         super().__init__()
-        self.student = student
-        self.teacher = teacher
-        self.teacher.eval()
+        self.model = model
+        self.device = device
+
+    @property
+    def name_or_path(self):
+        return getattr(self.model.config, 'name_or_path',
+                       getattr(self.model.config, '_name_or_path', ''))
+
+    def forward(self, input_ids, attention_mask, labels, output_hidden_states=False):
+        # Giống MTA student.py: mỗi model tự move inputs vào device của nó
+        input_ids     = input_ids.to(self.device)
+        attention_mask = attention_mask.to(self.device)
+        labels        = labels.to(self.device)
+        return self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_hidden_states=output_hidden_states,
+        )
+
+
+class DistillationModel(nn.Module):
+    def __init__(self, student, teacher, teacher_tokenizer, student_tokenizer,
+                 use_span_loss=False, student_device=None, teacher_device=None):
+        super().__init__()
+
+        self.student_device = student_device or next(student.parameters()).device
+        self.teacher_device = teacher_device or next(teacher.parameters()).device
+
+        # Wrap giống MTA: mỗi model tự quản lý device của mình
+        self.student = StudentWrapper(student, self.student_device)
+        self._teacher = TeacherWrapper(teacher, self.teacher_device)
         self.use_span_loss = use_span_loss
 
-    def forward(self, student_input_ids, student_attention_mask, student_labels, teacher_input_ids, teacher_attention_mask, teacher_labels):
-        with torch.no_grad():
-            teacher_output = self.teacher(
-                input_ids=teacher_input_ids,
-                attention_mask=teacher_attention_mask,
-                labels=teacher_labels,
-                output_hidden_states=self.use_span_loss,
-            )
+        # MTA pattern: copy teacher lm_head sang student device để tính loss
+        # tránh transfer hidden states nặng qua PCIe
+        self.teacher_lm_head = self._copy_teacher_lm_head(teacher)
 
+    def _copy_teacher_lm_head(self, teacher):
+        """Giống MTA Trainer.__init__: copy teacher lm_head sang student device, frozen."""
+        try:
+            lm_head = teacher.lm_head
+            copied = nn.Linear(
+                lm_head.in_features, lm_head.out_features,
+                bias=lm_head.bias is not None
+            ).to(device=self.student_device, dtype=lm_head.weight.dtype)
+            copied.load_state_dict(lm_head.state_dict())
+            for p in copied.parameters():
+                p.requires_grad = False
+            return copied
+        except AttributeError:
+            return None
+
+    def get_teacher_eval(self, teacher_inputs):
+        """
+        Giống MTA Trainer.get_teacher_eval():
+        1. Gọi teacher.decode() → teacher tự move inputs lên teacher_device
+        2. Transfer outputs về student_device với non_blocking=True
+        """
+        output = self._teacher.decode(teacher_inputs, output_hidden_states=self.use_span_loss)
+
+        # Transfer logits và hidden states về student device (non_blocking như MTA)
+        output.logits = output.logits.to(self.student_device, non_blocking=True)
+        if self.use_span_loss and output.hidden_states is not None:
+            output.hidden_states = tuple(
+                h.to(self.student_device, non_blocking=True)
+                for h in output.hidden_states
+            )
+        return output
+
+    @property
+    def teacher(self):
+        return self._teacher
+
+    def forward(self, student_input_ids, student_attention_mask, student_labels,
+                teacher_input_ids, teacher_attention_mask, teacher_labels):
+        # Step 1: teacher inference → transfer về student device (MTA pattern)
+        teacher_output = self.get_teacher_eval({
+            'input_ids':      teacher_input_ids,
+            'attention_mask': teacher_attention_mask,
+            'labels':         teacher_labels,
+        })
+
+        # Step 2: student inference — StudentWrapper tự move inputs lên student_device
         student_output = self.student(
             input_ids=student_input_ids,
             attention_mask=student_attention_mask,
@@ -360,10 +460,19 @@ class DistillationLoss(nn.Module):
         # Cross entropy loss
         crossentropy_loss = self.crossentropy_weight * student_predictions.loss
 
-        distillation_loss = torch.zeros(student.size(0), device=student.device) 
+        # Guard: if all samples have no valid answer tokens, skip distillation loss
+        mex_length = max(max(student_answer_size), max(teacher_answer_size))
+        if mex_length == 0:
+            total_loss = crossentropy_loss
+            span_loss = torch.zeros(1, device=crossentropy_loss.device)
+            return total_loss, crossentropy_loss, torch.zeros(1, device=crossentropy_loss.device), span_loss
+
+        distillation_loss = torch.zeros(student.size(0), device=student.device)
         for i in range(student.size(0)):
             size = min(student_answer_size[i], teacher_answer_size[i])
-            distillation_loss[i] = abs(student[i][:size] - teacher[i][:size]).sum(-1).mean(-1) 
+            if size > 0:
+                # .mean() on shape [size] — safe because size > 0
+                distillation_loss[i] = abs(student[i][:size] - teacher[i][:size]).sum(-1).mean()
 
         min_seq_len = min(student.size(1), teacher.size(1))
         teacher_aligned = teacher[:, :min_seq_len, :]

@@ -487,3 +487,8 @@ train | epoch   4 | Iter:   7098/  7140 | global iter:   3550/  3570 | loss: 0.7
 train | epoch   4 | Iter:   7118/  7140 | global iter:   3560/  3570 | loss: 0.7205 | ds_loss: 0.6724 | lr: 1.0234e-07 | scale:  4096.0000 | micro time: 0.878 | step time: 1.634
 train | epoch   4 | Iter:   7138/  7140 | global iter:   3570/  3570 | loss: 0.7498 | ds_loss: 0.7016 | lr: 1.0002e-07 | scale:  4096.0000 | micro time: 0.912 | step time: 1.672
 dev | avg_loss: 4.778076171875 | {'exact_match': 2.8, 'rougeL': 24.8021} | threshold: 0.2
+
+
+============================== EXP at 2026-05-02 15:53:16 ==============================
+dev | avg_loss: 2.2091064453125 | {'exact_match': 0.0, 'rougeL': 14.9784} | threshold: 0.0
+train | epoch   0 | Iter:     18/  7140 | global iter:     10/  3570 | loss: 1.3006 | ds_loss: 1.1110 | lr: 9.9998e-05 | scale:  2048.0000 | micro time: 1.824 | step time: 3.054

@@ -57,36 +57,43 @@ def load_tokenizer(name, encoder_decoder):
         tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer
 
-def load_model(train_config, rank):
+def load_model(train_config, rank, device=None):
     use_cache = False if train_config.enable_fsdp else True
     def load():
-        quant_kwargs = (
-            {"load_in_8bit": True, "device_map": "auto"}
-            if train_config.quantization
-            else {}
-        )
+        if train_config.quantization:
+            return AutoModelForCausalLM.from_pretrained(
+                train_config.model_name,
+                use_cache=use_cache,
+                load_in_8bit=True,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        # MTA-style: load directly onto target device via device_map
+        device_map = device if device is not None else None
+        dtype = torch.bfloat16 if getattr(train_config, 'pure_bf16', False) else torch.float16
         if "mt0" in train_config.model_name:
             return MT5ForConditionalGeneration.from_pretrained(
                 train_config.model_name,
                 use_cache=use_cache,
-                **quant_kwargs,
+                device_map=device_map,
             )
         elif "Qwen" in train_config.model_name:
             return AutoModelForCausalLM.from_pretrained(
                 train_config.model_name,
                 use_cache=use_cache,
-                torch_dtype=torch.float32,
+                torch_dtype=dtype,
                 trust_remote_code=True,
-                **quant_kwargs,
+                device_map=device_map,
             )
         else:
             return AutoModelForCausalLM.from_pretrained(
                 train_config.model_name,
                 use_cache=use_cache,
+                torch_dtype=dtype,
                 trust_remote_code=True,
-                **quant_kwargs,
+                device_map=device_map,
             )
-    
+
     if not train_config.enable_fsdp:
         model = load()
         
@@ -129,7 +136,7 @@ def _auto_detect_lora_targets(model):
             return candidates
     return ["q_proj", "v_proj"]
 
-def set_model(model, train_config, fsdp_config, rank, kwargs):
+def set_model(model, train_config, fsdp_config, rank, kwargs, device=None):
     if train_config.quantization:
         model = prepare_model_for_kbit_training(model)
 
@@ -167,6 +174,7 @@ def set_model(model, train_config, fsdp_config, rank, kwargs):
         return model
     else:
         if train_config.quantization: return model
+        elif device is not None: return model  # already on device via device_map in load()
         else:
             model = model.to(f"cuda:{rank}")
             # Gradient checkpointing: recomputes activations during backward instead of
@@ -177,24 +185,29 @@ def set_model(model, train_config, fsdp_config, rank, kwargs):
                     print(f"[set_model] gradient_checkpointing enabled for {train_config.model_name}")
             return model
 
-def get_model(train_config, fsdp_config, rank, kwargs):
-    model = load_model(train_config, rank)
-    model = set_model(model, train_config, fsdp_config, rank, kwargs)
+def get_model(train_config, fsdp_config, rank, kwargs, device=None):
+    model = load_model(train_config, rank, device=device)
+    model = set_model(model, train_config, fsdp_config, rank, kwargs, device=device)
     tokenizer = load_tokenizer(train_config.model_name, train_config.encoder_decoder)
     tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer, model
 
 def get_distillation_models(train_config, distil_config, fsdp_config, rank, kwargs):
-    student_tokenizer, student_model = get_model(train_config, fsdp_config, rank, kwargs)
+    student_device = getattr(distil_config, 'student_device', None)
+    teacher_device = getattr(distil_config, 'teacher_device', None)
+
+    student_tokenizer, student_model = get_model(train_config, fsdp_config, rank, kwargs, device=student_device)
 
     teacher_fsdp_config = FSDP_CONFIG()
     update_config((teacher_fsdp_config), **dataclasses.asdict(distil_config))
-    teacher_tokenizer, teacher_model = get_model(distil_config, distil_config, rank, kwargs)
+    teacher_tokenizer, teacher_model = get_model(distil_config, distil_config, rank, kwargs, device=teacher_device)
 
     use_span_loss = getattr(distil_config, 'span_loss_weight', 0.0) > 0
     model = DistillationModel(
         student_model, teacher_model, teacher_tokenizer, student_tokenizer,
         use_span_loss=use_span_loss,
+        student_device=student_device,
+        teacher_device=teacher_device,
     )
 
     # Create projectors on the model (part of model.parameters() → included in optimizer)

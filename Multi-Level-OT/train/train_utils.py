@@ -75,8 +75,8 @@ class SpanExtractor:
             words_offsets = [self._word_char_offsets(t) for t in teacher_texts]
 
         return {
-            's_attention_mask': student_attention_mask,
-            't_attention_mask': teacher_attention_mask,
+            's_attention_mask': student_attention_mask.to(device),
+            't_attention_mask': teacher_attention_mask.to(device),
             's_offsets_mapping': s_offsets,
             't_offsets_mapping': t_offsets,
             'spans_offsets': spans_offsets,
@@ -84,12 +84,15 @@ class SpanExtractor:
         }
 
 def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gradient_accumulation_steps, train_config, distil_config, dataset_config, teacher_train_dataloader=None, teacher_eval_dataloader=None, fsdp_config=None, local_rank=None, rank=None, f=1, student_tokenizer=None, teacher_tokenizer=None):
+    # Unwrap DDP/FSDP to access underlying DistillationModel attributes
+    raw_model = model.module if hasattr(model, 'module') else model
+
     # Weights & Biases tracking system initialization.
     os.environ["WANDB__SERVICE_WAIT"] = "300"
     if rank == 0:
         wandb.init(
             project=f"llm_distillation_{dataset_config.file.split('/')[-1][:-3]}",
-            name=f"{train_config.model_name.split('/')[-1]}-{model.teacher.name_or_path.split('/')[-1]}-d{distil_config.distil_factor}-t{distil_config.teacher_temperature}{distil_config.student_temperature}" if train_config.distillation else f"{train_config.model_name.split('/')[-1]}",
+            name=f"{train_config.model_name.split('/')[-1]}-{raw_model.teacher.name_or_path.split('/')[-1]}-d{distil_config.distil_factor}-t{distil_config.teacher_temperature}{distil_config.student_temperature}" if train_config.distillation else f"{train_config.model_name.split('/')[-1]}",
             config={
                 "model_name": train_config.model_name.split('/')[-1],
                 "dataset": dataset_config.file.split('/')[-1],
@@ -124,9 +127,9 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
             distillation_weight=distil_config.distil_factor,
             student_temperature=distil_config.student_temperature,
             teacher_temperature=distil_config.teacher_temperature,
-            skip_student_eos=True, debug=True, debug_rank=0,
-            tokenizer_student=model.student.name_or_path,
-            tokenizer_teacher=model.teacher.name_or_path,
+            skip_student_eos=True, debug=False, debug_rank=0,
+            tokenizer_student=raw_model.student.name_or_path,
+            tokenizer_teacher=raw_model.teacher.name_or_path,
             f=f,
             span_loss_weight=distil_config.span_loss_weight,
             distil_config=distil_config,
@@ -158,17 +161,19 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
     for epoch in range(train_config.num_epochs):
         epoch_start_time = time.perf_counter()
         total_length = steps_per_epoch//gradient_accumulation_steps
-        model.student.train() if train_config.distillation else model.train()
+        raw_model.student.train() if train_config.distillation else model.train()
         with MemoryTrace() as memtrace:
             total_loss = 0.0
             pbar = tqdm(colour="blue", desc=f"Training Epoch: {epoch+1}", total=total_length, dynamic_ncols=True)
             for step, batch in enumerate(train_dataloader if not train_config.distillation else zip(train_dataloader, teacher_train_dataloader)):
                 if train_config.distillation: batch = preprocess_distillation_batch(batch)
+                # MTA-style: DistillationModel.forward() handles per-device placement.
+                # Move all tensors to CPU here; the model moves them to the right GPU.
                 for key in batch.keys():
-                    if train_config.enable_fsdp or distil_config.enable_fsdp:
-                        batch[key] = batch[key].to(local_rank)
+                    if local_rank is not None:
+                        batch[key] = batch[key].to(f"cuda:{local_rank}")
                     else:
-                        batch[key] = batch[key].to('cuda:0')
+                        batch[key] = batch[key].to('cpu')
 
                 with autocast():
                     if train_config.distillation:
@@ -176,7 +181,7 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
 
                         span_data = None
                         if span_extractor is not None:
-                            dev = batch['student_input_ids'].device
+                            dev = raw_model.student_device
                             span_data = span_extractor.extract(
                                 batch['student_input_ids'],
                                 batch['teacher_input_ids'],
@@ -189,7 +194,7 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
                             epoch, student_output, teacher_output,
                             batch['student_labels'], batch['teacher_labels'],
                             rank=rank, span_data=span_data,
-                            projectors=getattr(model, 'projectors', None),
+                            projectors=getattr(raw_model, 'projectors', None),
                         )
                     else:
                         loss = model(**batch).loss
@@ -264,7 +269,7 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
                         if train_config.save_model:
                             checkpoint_start_time = time.perf_counter()
                             save_model(
-                                model if not train_config.distillation else model.student, 
+                                model,
                                 optimizer, ((steps_per_epoch*epoch)+step), train_config, distil_config, fsdp_config, rank
                             )
                             checkpoint_end_time = time.perf_counter() - checkpoint_start_time
@@ -279,11 +284,11 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
         epoch_end_time = time.perf_counter()-epoch_start_time
         epoch_times.append(epoch_end_time)
 
-        if torch.cuda.device_count() > 1 and train_config.enable_fsdp or distil_config.enable_fsdp:
+        if dist.is_initialized() and dist.get_world_size() > 1:
             dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
-        train_epoch_loss = total_loss / steps_per_epoch
-        if train_config.enable_fsdp:
-            train_epoch_loss = train_epoch_loss/world_size
+            train_epoch_loss = total_loss / steps_per_epoch / dist.get_world_size()
+        else:
+            train_epoch_loss = total_loss / steps_per_epoch
         train_perplexity = torch.exp(train_epoch_loss)
 
         train_prep.append(train_perplexity)

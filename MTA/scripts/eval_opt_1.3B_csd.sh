@@ -5,7 +5,7 @@ SEED=42
 # ==== Định nghĩa các biến ====
 BASE_PATH=.
 MODEL_PATH="facebook/opt-1.3b"
-OUTPUT_DIR="${BASE_PATH}/eval_outputs/${MODEL_PATH}-csd-3570"
+OUTPUT_DIR="${BASE_PATH}/eval_outputs/${MODEL_PATH}-spancsd-3570"
 
 
 mkdir -p ${OUTPUT_DIR}
@@ -30,8 +30,8 @@ OPTS+=" --output_dir ${OUTPUT_DIR}"
 # extra arguments
 OPTS+=" --seed ${SEED}"
 OPTS+=" --model_path ${MODEL_PATH}"
-# OPTS+=" --lora_path distillm-master/results/opt/train/spancsd_1.3B_6.7B-v2/3570"
-OPTS+=" --lora_path ./opt_csd"
+OPTS+=" --lora_path distillm-master/results/opt/train/spancsd_1.3B_6.7B-v2/3570"
+# OPTS+=" --lora_path ./opt_csd"
 OPTS+=" --tokenizer facebook/opt-1.3b"
 
 # ==== Gọi Python ====

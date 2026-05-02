@@ -1,7 +1,6 @@
 #!/bin/bash
-# Eval: Mistral-7B → TinyLlama-1.1B
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 export DS_IGNORE_CUDA_DETECTION=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -7,8 +7,18 @@ from torch.distributed.fsdp import StateDictType
 from models.checkpoint_handler import save_model_checkpoint, save_model_and_optimizer_sharded, save_optimizer_checkpoint
 
 
+def _unwrap_student(model, train_config):
+    """For distillation: unwrap DDP → DistillationModel → StudentWrapper → HF model."""
+    m = model.module if hasattr(model, 'module') else model
+    if train_config.distillation:
+        return m.student.model
+    return m
+
+
 def save_model(model, optimizer, step, train_config, distil_config, fsdp_config, rank):
-    if train_config.enable_fsdp or distil_config.enable_fsdp:
+    is_dist = (train_config.enable_fsdp or distil_config.enable_fsdp or
+               (dist.is_initialized() and dist.get_world_size() > 1))
+    if is_dist:
         dist.barrier()
     path = fr"{train_config.output_dir}/{step+1}"
     try: os.mkdir(path)
@@ -16,7 +26,7 @@ def save_model(model, optimizer, step, train_config, distil_config, fsdp_config,
 
     if train_config.use_peft:
         if rank == 0: print(f"We are about to save the PEFT modules")
-        model.save_pretrained(path)
+        _unwrap_student(model, train_config).save_pretrained(path)
         if rank == 0: print(f"PEFT modules are saved in {path} directory")
 
     elif train_config.enable_fsdp:
@@ -35,10 +45,10 @@ def save_model(model, optimizer, step, train_config, distil_config, fsdp_config,
     else:
         if rank == 0:
             print(f"We are about to save the model")
-            model.save_pretrained(path)
+            _unwrap_student(model, train_config).save_pretrained(path)
             print(f"Model are saved in {path} directory")
 
-    if train_config.enable_fsdp or distil_config.enable_fsdp:
+    if is_dist:
         dist.barrier()
 
 def save_train_params(train_config, fsdp_config, rank):

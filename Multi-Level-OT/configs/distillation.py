@@ -28,6 +28,10 @@ class distillation_config:
     student_hidden_size: int = 0          # auto-detected from model if 0
     teacher_hidden_size: int = 0          # auto-detected from model if 0
 
+    # Multi-GPU: MTA-style model parallelism (teacher on one GPU, student on another)
+    student_device: str = "cuda:0"
+    teacher_device: str = "cuda:1"
+
     # FSDP Config
     mixed_precision: bool = False
     use_fp16: bool = False
