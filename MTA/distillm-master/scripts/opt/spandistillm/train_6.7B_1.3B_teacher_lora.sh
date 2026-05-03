@@ -103,9 +103,9 @@ OPTS+=" --temperature 1.0"
 # distillm
 OPTS+=" --student-gen"
 
-OPTS+=" --teacher_layer_mapping 12 16 20 24 28 32"
-OPTS+=" --student_layer_mapping 9 12 15 18 21 24"
-OPTS+=" --split_layer_mapping 0 1 6 6"
+OPTS+=" --teacher_layer_mapping 20 23 26 29 32"
+OPTS+=" --student_layer_mapping 16 18 20 22 24"
+OPTS+=" --split_layer_mapping 0 1 5 5"
 OPTS+=" --entropy_weight"
 
 OPTS+=" --gen-num-beams 1"

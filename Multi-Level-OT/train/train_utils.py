@@ -196,6 +196,8 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
                             rank=rank, span_data=span_data,
                             projectors=getattr(raw_model, 'projectors', None),
                         )
+                        # Free teacher outputs (no grad_fn) and span_data early to reduce peak VRAM
+                        del teacher_output, span_data
                     else:
                         loss = model(**batch).loss
 
