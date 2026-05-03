@@ -70,7 +70,12 @@ def load_model(train_config, rank, device=None):
             )
         # MTA-style: load directly onto target device via device_map
         device_map = device if device is not None else None
-        dtype = torch.bfloat16 if getattr(train_config, 'pure_bf16', False) else torch.float16
+        if getattr(train_config, 'pure_bf16', False):
+            dtype = torch.bfloat16
+        elif getattr(train_config, 'use_fp16', False):
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
         if "mt0" in train_config.model_name:
             return MT5ForConditionalGeneration.from_pretrained(
                 train_config.model_name,

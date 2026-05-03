@@ -8,7 +8,8 @@ import torch.nn.functional as F
 # ============================================================
 
 def compute_token_weights(hidden_state, attention_mask):
-    std = hidden_state.std(dim=-1, keepdim=True) + 1e-5
+    hidden_state = hidden_state.float()  # BF16 std can be 0 → Q/K overflow → NaN
+    std = hidden_state.std(dim=-1, keepdim=True).clamp(min=1e-6)
     Q = hidden_state / std
     K = hidden_state / std
     scores = torch.matmul(Q, K.transpose(-1, -2)) / (hidden_state.size(-1) ** 0.5)
@@ -20,10 +21,10 @@ def compute_token_weights(hidden_state, attention_mask):
 
     attn_weights = F.softmax(scores, dim=-1)
     attn_weights = attn_weights * mask
-    attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True)
+    attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp(min=1e-10)
 
     token_weights = attn_weights.mean(dim=1).squeeze(0)  # [L]
-    return token_weights.detach()
+    return token_weights.nan_to_num(nan=0.0).detach()
 
 
 def filter_overlapping_spans(spans):

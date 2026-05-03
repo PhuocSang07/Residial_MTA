@@ -1,6 +1,6 @@
 #! /bin/bash
 
-GPUS=(1)
+GPUS=(0 1)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
@@ -27,7 +27,7 @@ TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT"
 # data
 DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 # hp
-BATCH_SIZE=8
+BATCH_SIZE=4
 LR=0.0001
 GRAD_ACC=2
 EVAL_BATCH_SIZE=64

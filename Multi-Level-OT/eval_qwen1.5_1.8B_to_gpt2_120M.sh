@@ -5,7 +5,7 @@ export CUDA_VISIBLE_DEVICES=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export DS_IGNORE_CUDA_DETECTION=1
 
-RUN_DIR="$SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-120M"
+RUN_DIR="$SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-120M/mta"
 
 # Đặt số step thủ công, hoặc để trống để tự lấy checkpoint lớn nhất
 CKPT_STEP=""
@@ -17,7 +17,7 @@ else
 fi
 
 CKPT_STEP_NUM=$(basename "$CKPT_PATH")
-OUTPUT_DIR="$SCRIPT_DIR/eval_results/qwen1.5-1.8B-to-gpt2-120M/$CKPT_STEP_NUM"
+OUTPUT_DIR="$SCRIPT_DIR/eval_results/qwen1.5-1.8B-to-gpt2-120M/mta/$CKPT_STEP_NUM"
 mkdir -p "$OUTPUT_DIR"
 
 echo "Using checkpoint: $CKPT_PATH"

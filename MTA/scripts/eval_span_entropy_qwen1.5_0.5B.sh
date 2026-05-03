@@ -4,7 +4,7 @@ SEED=42
 
 # ==== Định nghĩa các biến ====
 BASE_PATH=.
-MODEL_PATH="./distillm-master/results/qwen1.5/spandistillm_0.5B_1.8B_entropy/3570"
+MODEL_PATH="./distillm-master/results/qwen1.5/spandistillm_0.5B_1.8B_entropy/1785"
 OUTPUT_DIR="${BASE_PATH}/eval_outputs/${MODEL_PATH}"
 
 

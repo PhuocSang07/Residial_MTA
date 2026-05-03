@@ -3,7 +3,8 @@
 #        → openai-community/gpt2 (student, 768-dim, 12 layers)
 # Variant: MTA (OT + Span loss, no entropy weight)
 
-GPUS=(0 1 2 3 4 5 6 7)
+# GPUS=(0 1 2 3 4 5 6 7)
+GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 export DS_IGNORE_CUDA_DETECTION=1
@@ -25,10 +26,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPTS=""
 OPTS+=" --model_name openai-community/gpt2"
 OPTS+=" --dataset.file $SCRIPT_DIR/llm_distillation/datasets/loader/dolly.py"
-OPTS+=" --lr 1e-4"
+OPTS+=" --lr 1e-5"
 OPTS+=" --num_epochs 10"
-OPTS+=" --batch_size_training 2"
-OPTS+=" --gradient_accumulation_steps 1"
+OPTS+=" --batch_size_training 8"
+OPTS+=" --gradient_accumulation_steps 2"
 OPTS+=" --val_batch_size 8"
 OPTS+=" --output_dir $SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-120M/mta"
 OPTS+=" --distillation"
@@ -40,9 +41,9 @@ OPTS+=" --distillation_config_teacher_temperature 2.0"
 OPTS+=" --distillation_config_pure_bf16"
 OPTS+=" --student_device cuda:0"
 OPTS+=" --teacher_device cuda:0"
-OPTS+=" --save_step 2500"
+OPTS+=" --save_step 5000"
 OPTS+=" --f 1"
-OPTS+=" --span_loss_weight 2.0"
+OPTS+=" --span_loss_weight 0.1"
 OPTS+=" --student_layer_mapping 6,9,12"
 OPTS+=" --teacher_layer_mapping 12,18,24"
 OPTS+=" --split_layer_mapping 0,1,3"

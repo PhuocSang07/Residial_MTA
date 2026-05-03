@@ -1,8 +1,14 @@
 # local Python environment
 .venv/
+.claude/
+CLAUDE.md
+multi-level-ot/
 venv/
 env/
 hf_model_sync.ipynb
+
+# nested clone / separate repo (do not track as submodule unless intentional)
+eval_mta/
 # Python
 __pycache__/
 *.py[cod]
@@ -21,6 +27,10 @@ build/
 *.bin
 *.pt
 *.pth
+adapter_config.json
+tokenizer_config.json
+generation_config.json
+tokenizer.json
 
 # tools / run artifacts
 .wandb/

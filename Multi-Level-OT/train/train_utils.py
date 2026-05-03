@@ -211,8 +211,21 @@ def train(model, train_dataloader, eval_dataloader, optimizer, lr_scheduler, gra
                 else:
                     loss.backward()
                     if (step + 1) % gradient_accumulation_steps == 0 or step == steps_per_epoch - 1:
-                        optimizer.step()
-                        optimizer.zero_grad()
+                        # Clip ALL trainable params (student + projectors), not just student
+                        all_trainable = [p for p in model.parameters() if p.requires_grad]
+                        torch.nn.utils.clip_grad_norm_(all_trainable, max_norm=1.0)
+                        # Skip step if any gradient is NaN/Inf to prevent weight corruption
+                        has_bad_grad = any(
+                            p.grad is not None and not torch.isfinite(p.grad).all()
+                            for p in all_trainable
+                        )
+                        if has_bad_grad:
+                            if rank == 0:
+                                print(f"[step {step}] NaN/Inf gradient detected — skipping optimizer step")
+                            optimizer.zero_grad()
+                        else:
+                            optimizer.step()
+                            optimizer.zero_grad()
                         pbar.update()
 
                 if rank == 0:

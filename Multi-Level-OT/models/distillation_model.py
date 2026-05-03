@@ -42,32 +42,36 @@ def improved_sort(value):
     return sorted_values
 
 def normalize(value):
-    means = value.mean(dim=-1, keepdim=True)
-    stds = value.std(dim=-1, keepdim=True)
-    z_score_normalized_student = (value)/ (stds+0.0001)
-    return z_score_normalized_student
+    # Stay in float32 — converting back to fp16/bf16 can overflow (fp16 max=65504)
+    value_f = value.float()
+    stds = value_f.std(dim=-1, keepdim=True).clamp(min=1e-6)
+    return value_f / stds
 
-def KL_wo(y_s, y_t,T=1):
-    p_s = F.log_softmax(y_s/T, dim=-1)
-    p_t = F.softmax(y_t/T, dim=-1)
-    loss = -torch.sum(p_t * p_s, dim=-1).mean()
+def KL_wo(y_s, y_t, T=1):
+    # Compute in float32: BF16 can produce exact 0 probabilities → 0 * -inf = NaN
+    p_s = F.log_softmax(y_s.float() / T, dim=-1)
+    p_t = F.softmax(y_t.float() / T, dim=-1)
+    # clamp p_t so 0 * -inf never appears
+    loss = -torch.sum(p_t.clamp(min=1e-10) * p_s, dim=-1).mean()
     return loss
 
 class Sinkhorn_seq(nn.Module):
     def __init__(self, T=2):
         super(Sinkhorn_seq, self).__init__()
         self.T = 2   
-    def sinkhorn_normalized(self,x, n_iters=20):
+    def sinkhorn_normalized(self, x, n_iters=20):
         for _ in range(n_iters):
-            x = x / torch.sum(x, dim=1, keepdim=True)
-            x = x / torch.sum(x, dim=0, keepdim=True)
+            x = x / torch.sum(x, dim=1, keepdim=True).clamp(min=1e-10)
+            x = x / torch.sum(x, dim=0, keepdim=True).clamp(min=1e-10)
         return x
 
-    def sinkhorn_loss(self,x, y, epsilon=0.1, n_iters=10):
-        Wxy = torch.cdist(x.float(), y.float(), p=1)
-        K = torch.exp(-Wxy / epsilon)  
-        P = self.sinkhorn_normalized(K, n_iters)  
-        return torch.sum(P * Wxy)  
+    def sinkhorn_loss(self, x, y, epsilon=0.5, n_iters=10):
+        # Compute in float32: BF16 causes exp() underflow → K=0 → NaN
+        x_f, y_f = x.float(), y.float()
+        Wxy = torch.cdist(x_f, y_f, p=1)
+        K = torch.exp(-Wxy / epsilon).clamp(min=1e-30)
+        P = self.sinkhorn_normalized(K, n_iters)
+        return torch.sum(P * Wxy)
     def forward(self, y_s, y_t):
         softmax = nn.Softmax(dim=-1)
         p_s = softmax(y_s/self.T)
@@ -485,9 +489,10 @@ class DistillationLoss(nn.Module):
         if self.debug and rank == self.debug_rank:
             print(f"Loss: Crossentropy loss: {crossentropy_loss} | Distillation loss: {distillation_loss} | Total loss: {crossentropy_loss + distillation_loss}")
 
-        total_loss = crossentropy_loss + distillation_loss
-        span_loss = torch.tensor(0.0, device=student.device)
+        # Guard each component BEFORE summing so crossentropy gradient is always preserved
+        distillation_loss = torch.nan_to_num(distillation_loss, nan=0.0, posinf=0.0, neginf=0.0)
 
+        span_loss = torch.tensor(0.0, device=student.device)
         if (self.span_loss_weight > 0 and span_data is not None
                 and projectors is not None
                 and student_predictions.hidden_states is not None
@@ -508,8 +513,9 @@ class DistillationLoss(nn.Module):
                 self.distil_config,
             )
             span_loss = self.span_loss_weight * span_loss
-            total_loss = total_loss + span_loss
+            span_loss = torch.nan_to_num(span_loss, nan=0.0, posinf=0.0, neginf=0.0)
 
+        total_loss = crossentropy_loss + distillation_loss + span_loss
         return total_loss, crossentropy_loss, distillation_loss, span_loss
 
     def __get_start_and_size_answers(self, answer_tensors):
