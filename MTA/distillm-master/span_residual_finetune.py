@@ -879,22 +879,31 @@ def evaluate(args, tokenizer, model, dataset: LMTrainDataset, split, epoch, devi
             else:
                 loss = loss_func(logits.view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
 
-            # Generate when: full eval requested OR still within subset quota
-            should_gen = do_full_gen or (gen_sample_count < eval_gen_num)
+            # Generate when: full eval requested OR still within subset quota.
+            # Skip batches where the prompt already fills max_length (no room for response).
+            prompt_len = gen_data["input_ids"].size(1)
+            # Fixed response length: max_length - max_prompt_length (e.g. 512 - 256 = 256).
+            # All response tensors must share this width for torch.cat to work.
+            fixed_resp_len = args.max_length - getattr(args, "max_prompt_length", prompt_len)
+            fixed_resp_len = max(fixed_resp_len, 1)
+            should_gen = (do_full_gen or (gen_sample_count < eval_gen_num)) and (fixed_resp_len > 0)
             if should_gen:
-                max_new_tokens = max(1, args.max_length - gen_data["input_ids"].size(1))
+                max_new_tokens = max(1, fixed_resp_len)
                 gen_out = model.generate(
                     **gen_data,
                     generation_config=generation_config,
                     max_new_tokens=max_new_tokens)
 
-                full_ids = gen_out.sequences
-                full_ids = F.pad(
-                    full_ids,
-                    (0, args.max_length - full_ids.shape[1]),
-                    value=tokenizer.pad_token_id,
-                )
-                response_ids = full_ids[:, gen_data["input_ids"].size(1):]
+                full_ids = gen_out.sequences              # (B, prompt_len + generated)
+                response_ids = full_ids[:, prompt_len:]   # (B, generated_len)
+
+                # Pad / clip to fixed_resp_len so all batches share the same width
+                pad_len = fixed_resp_len - response_ids.size(1)
+                if pad_len > 0:
+                    response_ids = F.pad(response_ids, (0, pad_len), value=tokenizer.pad_token_id)
+                elif pad_len < 0:
+                    response_ids = response_ids[:, :fixed_resp_len]
+
                 all_response_ids.append(response_ids)
                 gen_sample_count += response_ids.size(0)
 
