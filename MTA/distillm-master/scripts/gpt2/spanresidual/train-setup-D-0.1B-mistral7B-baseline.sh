@@ -1,11 +1,14 @@
-#! /bin/bash
+#!/bin/bash
+# Setup D BASELINE — SpanResidual KD (no MTA): Mistral-7B-Dolly -> GPT2-120M
+# Includes lambda_res warmup to fix early training instability.
+# Requires: projector_best.pt from pretrain-mistral7B-projectors.sh
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
 MASTER_ADDR=localhost
-MASTER_PORT=66$(($RANDOM%90+10))
+MASTER_PORT=68$(($RANDOM%90+10))
 NNODES=1
 NODE_RANK=0
 GPUS_PER_NODE=${#GPUS[@]}
@@ -16,44 +19,53 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
                   --master_addr $MASTER_ADDR \
                   --master_port $MASTER_PORT"
 
-# model
 BASE_PATH=./distillm-master
+
 CKPT_NAME="gpt2-base"
 CKPT="openai-community/gpt2"
-TEACHER_CKPT_NAME="xlarge-sft"
-TEACHER_CKPT="MiniLLM/teacher-gpt2-1.5B"
-# data
-DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
-# LM_DATA_DIR="${BASE_PATH}/processed_data/openwebtext/gpt2/512/10M/"
-# hp
-BATCH_SIZE=16
-LR=0.0001
-GRAD_ACC=2
-EVAL_BATCH_SIZE=128
-EPOCHS=5
-# length
-MAX_LENGTH=256
-# runtime
-SAVE_PATH="${BASE_PATH}/results/gpt2/train/spandistill_0.1B_1.5B_entropy"
-# seed
+
+TEACHER_CKPT="VoCuc/Mistral7B_Dolly_SFT"
+TEACHER_CKPT_NAME="mistral-7B-dolly-sft"
+
+PROJECTOR_PATH="${BASE_PATH}/results/mistral/projectors/spanresidual_mistral7B_v2/projector_best.pt"
+
+STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
+TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/mistral/"
+
+BATCH_SIZE=32
+LR=1e-3
+GRAD_ACC=4
+EVAL_BATCH_SIZE=32
+EPOCHS=10
+MAX_LENGTH=512
+
+LAMBDA_RES=0.5
+LAMBDA_RES_WARMUP=500   # ramp 0→0.5 over 500 steps
+GAMMA_SPAN=0.0
+W_SPAN_LOSS=0.0
+
+SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_D_0.1B_mistral7B"
 SEED=42
 
-
 OPTS=""
-# model
 OPTS+=" --base-path ${BASE_PATH}"
 OPTS+=" --model-path ${CKPT}"
-OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
+OPTS+=" --model-type gpt2"
 OPTS+=" --ckpt-name ${CKPT_NAME}"
+OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
+OPTS+=" --teacher-model-type mistral"
 OPTS+=" --teacher-model-fp16"
 OPTS+=" --n-gpu ${GPUS_PER_NODE}"
-# data
-OPTS+=" --data-dir ${DATA_DIR}"
-# OPTS+=" --lm-data-dir ${LM_DATA_DIR}"
+OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
+OPTS+=" --d-bottleneck 64"
+OPTS+=" --lambda-res ${LAMBDA_RES}"
+OPTS+=" --lambda-res-warmup-steps ${LAMBDA_RES_WARMUP}"
+OPTS+=" --gamma-span ${GAMMA_SPAN}"
+OPTS+=" --data-dir ${STUDENT_DATA_DIR}"
+OPTS+=" --teacher-data-dir ${TEACHER_DATA_DIR}"
 OPTS+=" --num-workers 1"
 OPTS+=" --dev-num 1000"
-# hp
 OPTS+=" --lr ${LR}"
 OPTS+=" --batch-size ${BATCH_SIZE}"
 OPTS+=" --eval-batch-size ${EVAL_BATCH_SIZE}"
@@ -64,56 +76,43 @@ OPTS+=" --weight-decay 1e-2"
 OPTS+=" --clip-grad 1.0"
 OPTS+=" --epochs ${EPOCHS}"
 OPTS+=" --kd-ratio 1.0"
-OPTS+=" --w-span-loss 2.0"
-# length
+OPTS+=" --warmup-ratio 0.1"
+OPTS+=" --w-span-loss ${W_SPAN_LOSS}"
 OPTS+=" --max-length ${MAX_LENGTH}"
-OPTS+=" --max-prompt-length 128"
-# runtime
+OPTS+=" --max-prompt-length 256"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
-OPTS+=" --eval-gen"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"
-# seed
-OPTS+=" --seed ${SEED}"
-# deepspeed
-OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
-# type
 OPTS+=" --type adaptive-srkl"
-# gen
+OPTS+=" --seed ${SEED}"
+OPTS+=" --deepspeed"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 OPTS+=" --do-sample"
 OPTS+=" --top-k 0"
 OPTS+=" --top-p 1.0"
 OPTS+=" --temperature 1.0"
-# distillm
-OPTS+=" --student-gen"
-
-OPTS+=" --teacher_layer_mapping 24 36 48"
-OPTS+=" --student_layer_mapping  7 9 12"
-OPTS+=" --split_layer_mapping 0 1 3 3"
-OPTS+=" --entropy_weight"
-
 OPTS+=" --gen-num-beams 1"
 OPTS+=" --gen-top-p 1.0"
 OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
-
+OPTS+=" --student-gen"
+# Mistral 32 layers → GPT2 12 layers
+OPTS+=" --teacher_layer_mapping 10 21 32"
+OPTS+=" --student_layer_mapping 4 8 12"
+OPTS+=" --split_layer_mapping 0 1 3 3"
 
 export NCCL_DEBUG=""
 export WANDB_DISABLED=True
 export TF_CPP_MIN_LOG_LEVEL=3
 export PYTHONPATH=${BASE_PATH}
-CMD="torchrun ${DISTRIBUTED_ARGS} ${BASE_PATH}/span_finetune.py ${OPTS} $@"
+CMD="torchrun ${DISTRIBUTED_ARGS} ${BASE_PATH}/span_residual_finetune.py ${OPTS} $@"
 
 echo ${CMD}
 echo "PYTHONPATH=${PYTHONPATH}"
 mkdir -p ${SAVE_PATH}
 CODE_BASE=HF ${CMD}
-
-# ${CMD} \
-# >> ${SAVE_PATH}/train.log 2>&1 &

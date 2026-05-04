@@ -89,6 +89,8 @@ def add_data_args(parser: argparse.ArgumentParser):
     
     group.add_argument("--prompt-data-dir", type=str)
     group.add_argument("--lm-data-dir", type=str)
+    group.add_argument("--teacher-data-dir", type=str, default=None,
+                       help="Pre-tokenized data dir for teacher (cross-tokenizer setup)")
     group.add_argument("--eval-ppl", action="store_true")
     group.add_argument("--eval-rw", action="store_true")
     group.add_argument("--eval-gen", action="store_true")
@@ -202,6 +204,25 @@ def add_distillm_args(parser: argparse.ArgumentParser):
     group.add_argument("--use_dsa", action="store_true")
     group.add_argument("--use_hs", action="store_true")
     group.add_argument("--entropy_weight", action="store_true")
+
+    # SpanResidual KD — projector pretrain + Stage 2 residual learning
+    group.add_argument("--d-bottleneck", type=int, default=64,
+                       help="Anchor-space dimension d_A for ProjectorTA")
+    group.add_argument("--projector-save-path", type=str, default=None,
+                       help="Where to save Stage-1 projector checkpoints")
+    group.add_argument("--projector-load-path", type=str, default=None,
+                       help="Path to projector_best.pt for Stage-2 loading")
+    group.add_argument("--projector-pretrain-epochs", type=int, default=10,
+                       help="Number of epochs for Stage-1 projector pretraining")
+    group.add_argument("--projector-lr", type=float, default=1e-3,
+                       help="Learning rate for Stage-1 projector pretraining")
+    group.add_argument("--lambda-res", type=float, default=0.5,
+                       help="Weight lambda for residual loss in Stage 2")
+    group.add_argument("--lambda-res-warmup-steps", type=int, default=500,
+                       help="Linearly ramp lambda_res from 0 to --lambda-res over this many steps. "
+                            "Set 0 to disable warmup (use full lambda from step 1).")
+    group.add_argument("--gamma-span", type=float, default=1.0,
+                       help="Weight gamma for MTA span loss in Stage 2")
 
     # OT-based logit distillation (Multi-Level-OT integration)
     group.add_argument("--w-ot-loss", type=float, default=1.0,

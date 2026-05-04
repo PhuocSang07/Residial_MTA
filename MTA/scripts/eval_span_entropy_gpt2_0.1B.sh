@@ -4,7 +4,7 @@ SEED=42
 
 # ==== Định nghĩa các biến ====
 BASE_PATH=.
-MODEL_PATH="distillm-master/results/gpt2/train/spandistill_0.1B_1.5B_entropy_4l/3570"
+MODEL_PATH="distillm-master/results/gpt2/train/spandistill_0.1B_1.5B_entropy/1785"
 OUTPUT_DIR="${BASE_PATH}/eval_outputs/${MODEL_PATH}"
 
 
