@@ -94,7 +94,10 @@ def add_data_args(parser: argparse.ArgumentParser):
     group.add_argument("--eval-ppl", action="store_true")
     group.add_argument("--eval-rw", action="store_true")
     group.add_argument("--eval-gen", action="store_true")
-    
+    group.add_argument("--eval-gen-num", type=int, default=200,
+                       help="Number of samples to generate for ROUGE during training eval "
+                            "(ignored when --eval-gen is set, which generates all samples)")
+
     group.add_argument("--only-prompt", action="store_true")
     return parser
 

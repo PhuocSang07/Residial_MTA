@@ -1,10 +1,10 @@
 #!/bin/bash
 # Eval: Qwen1.5-1.8B → GPT-2 340M (medium)
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-RUN_DIR="$SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-340M"
+RUN_DIR="$SCRIPT_DIR/output/qwen1.5-1.8B-to-gpt2-340M/mta"
 
 CKPT_STEP=""
 
@@ -15,7 +15,7 @@ else
 fi
 
 CKPT_STEP_NUM=$(basename "$CKPT_PATH")
-OUTPUT_DIR="$SCRIPT_DIR/eval_results/qwen1.5-1.8B-to-gpt2-340M/$CKPT_STEP_NUM"
+OUTPUT_DIR="$SCRIPT_DIR/eval_results/qwen1.5-1.8B-to-gpt2-340M/mta/$CKPT_STEP_NUM"
 mkdir -p "$OUTPUT_DIR"
 
 echo "Using checkpoint: $CKPT_PATH"

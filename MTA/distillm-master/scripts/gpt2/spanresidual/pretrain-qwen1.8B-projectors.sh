@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stage 1 — Projector pretraining: P_T->A and P_A->T for Qwen1.5-1.8B teacher.
 # Trains on Qwen-tokenised Dolly. Teacher is frozen throughout.
+# Full-sequence CE loss (paper Eq.3), bfloat16, max_length=512.
 # Output: ${SAVE_PATH}/projector_best.pt  (used by Stage-2 spanresidual training)
 
 GPUS=(0)
@@ -21,41 +22,34 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-# Teacher = model (tokenizer loaded from same path)
 TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
 TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
-# Data: Qwen-tokenised Dolly binaries
 DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-# Hyperparameters
-BATCH_SIZE=16
-EVAL_BATCH_SIZE=32
+BATCH_SIZE=64
+EVAL_BATCH_SIZE=64
 GRAD_ACC=1
 D_BOTTLENECK=64
 PROJECTOR_EPOCHS=10
 PROJECTOR_LR=1e-3
 
-# Save path
-SAVE_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B"
+SAVE_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2"
 SEED=42
 
 OPTS=""
-# model — use teacher as "model-path" so get_tokenizer loads Qwen tokenizer
 OPTS+=" --model-path ${TEACHER_CKPT}"
 OPTS+=" --model-type qwen"
 OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
 OPTS+=" --teacher-model-fp16"
 OPTS+=" --n-gpu ${GPUS_PER_NODE}"
-# data
 OPTS+=" --data-dir ${DATA_DIR}"
 OPTS+=" --num-workers 1"
 OPTS+=" --dev-num 1000"
 OPTS+=" --train-num -1"
 OPTS+=" --train-ratio 1"
 OPTS+=" --dev-ratio 1"
-# hp
 OPTS+=" --lr ${PROJECTOR_LR}"
 OPTS+=" --projector-lr ${PROJECTOR_LR}"
 OPTS+=" --projector-pretrain-epochs ${PROJECTOR_EPOCHS}"
@@ -68,10 +62,8 @@ OPTS+=" --clip-grad 1.0"
 OPTS+=" --lr-decay-style cosine"
 OPTS+=" --warmup-iters 0"
 OPTS+=" --lr-min 1e-6"
-# length
-OPTS+=" --max-length 256"
-OPTS+=" --max-prompt-length 128"
-# runtime
+OPTS+=" --max-length 512"
+OPTS+=" --max-prompt-length 256"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --type projector-pretrain"
@@ -80,11 +72,9 @@ OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
 OPTS+=" --log-interval 50"
 OPTS+=" --mid-log-num -1"
-# seed
 OPTS+=" --seed ${SEED}"
-# deepspeed
 OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 
 export NCCL_DEBUG=""
 export WANDB_DISABLED=True

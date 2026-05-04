@@ -3,7 +3,7 @@
 #        → TinyLlama/TinyLlama_v1.1 (student, 2048-dim, 22 layers)
 # Variant: MTA + Entropy Weight
 
-GPUS=(0 1 2 3 4 5 6 7)
+GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
@@ -26,8 +26,8 @@ OPTS+=" --model_name TinyLlama/TinyLlama_v1.1"
 OPTS+=" --dataset.file $SCRIPT_DIR/llm_distillation/datasets/loader/dolly.py"
 OPTS+=" --lr 1e-4"
 OPTS+=" --num_epochs 10"
-OPTS+=" --batch_size_training 2"
-OPTS+=" --gradient_accumulation_steps 1"
+OPTS+=" --batch_size_training 8"
+OPTS+=" --gradient_accumulation_steps 2"
 OPTS+=" --val_batch_size 16"
 OPTS+=" --output_dir $SCRIPT_DIR/output/mistral-7B-to-tinyllama-1.1B/mta_ew"
 OPTS+=" --distillation"

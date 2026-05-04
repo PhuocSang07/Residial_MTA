@@ -5,7 +5,7 @@ export DS_IGNORE_CUDA_DETECTION=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BASE_MODEL="TinyLlama/TinyLlama_v1.1"
-RUN_DIR="$SCRIPT_DIR/output/mistral-7B-to-tinyllama-1.1B"
+RUN_DIR="$SCRIPT_DIR/output/mistral-7B-to-tinyllama-1.1B/mta"
 
 CKPT_STEP=""
 
@@ -16,7 +16,7 @@ else
 fi
 
 CKPT_STEP_NUM=$(basename "$CKPT_PATH")
-OUTPUT_DIR="$SCRIPT_DIR/eval_results/mistral-7B-to-tinyllama-1.1B/$CKPT_STEP_NUM"
+OUTPUT_DIR="$SCRIPT_DIR/eval_results/mistral-7B-to-tinyllama-1.1B/mta/$CKPT_STEP_NUM"
 mkdir -p "$OUTPUT_DIR"
 
 echo "Using checkpoint: $CKPT_PATH"
@@ -36,5 +36,5 @@ python eval_generate.py \
   --mta_data_dir "$SCRIPT_DIR/../MTA/data" \
   --output_dir "$OUTPUT_DIR" \
   --max_new_tokens 128 \
-  --batch_size 8 \
+  --batch_size 16 \
   >> "$OUTPUT_DIR/eval.log" 2>&1

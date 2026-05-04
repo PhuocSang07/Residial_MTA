@@ -1,7 +1,7 @@
 #!/bin/bash
-# Setup A BASELINE — SpanResidual KD (no MTA span loss): Qwen1.5-1.8B -> GPT2-120M
-# Loss: L = (1 - lambda_res)*L_SFT + lambda_res*L_res   (gamma_span=0)
-# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh
+# Setup A BASELINE — SpanResidual KD (no MTA): Qwen1.5-1.8B -> GPT2-120M
+# Includes lambda_res warmup to fix early training instability.
+# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh (v2)
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
@@ -21,32 +21,27 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-# Student: GPT2-120M
 CKPT_NAME="gpt2-base"
 CKPT="openai-community/gpt2"
 
-# Teacher: Qwen1.5-1.8B SFT on Dolly
 TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
 TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
-# Stage-1 projector checkpoint
-PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B/projector_best.pt"
+PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2/projector_best.pt"
 
-# Data
 STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
 TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-# Hyperparameters (On et al. ICLR 2026 Stage 2):
-BATCH_SIZE=16
+BATCH_SIZE=32
 LR=1e-3
-GRAD_ACC=8          # 16 * 8 = 128 global batch (matches paper)
+GRAD_ACC=4
 EVAL_BATCH_SIZE=32
 EPOCHS=10
-MAX_LENGTH=256
+MAX_LENGTH=512
 
-# Baseline: no MTA span loss
 LAMBDA_RES=0.5
-GAMMA_SPAN=0.0      # no span supervision
+LAMBDA_RES_WARMUP=500   # ramp 0→0.5 over 500 steps
+GAMMA_SPAN=0.0
 W_SPAN_LOSS=0.0
 
 SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_A_0.1B_qwen1.8B"
@@ -65,6 +60,7 @@ OPTS+=" --n-gpu ${GPUS_PER_NODE}"
 OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
 OPTS+=" --d-bottleneck 64"
 OPTS+=" --lambda-res ${LAMBDA_RES}"
+OPTS+=" --lambda-res-warmup-steps ${LAMBDA_RES_WARMUP}"
 OPTS+=" --gamma-span ${GAMMA_SPAN}"
 OPTS+=" --data-dir ${STUDENT_DATA_DIR}"
 OPTS+=" --teacher-data-dir ${TEACHER_DATA_DIR}"
@@ -83,10 +79,9 @@ OPTS+=" --kd-ratio 1.0"
 OPTS+=" --warmup-ratio 0.1"
 OPTS+=" --w-span-loss ${W_SPAN_LOSS}"
 OPTS+=" --max-length ${MAX_LENGTH}"
-OPTS+=" --max-prompt-length 128"
+OPTS+=" --max-prompt-length 256"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
-OPTS+=" --eval-gen"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
 OPTS+=" --log-interval 10"
@@ -95,7 +90,7 @@ OPTS+=" --save ${SAVE_PATH}"
 OPTS+=" --type adaptive-srkl"
 OPTS+=" --seed ${SEED}"
 OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 OPTS+=" --do-sample"
 OPTS+=" --top-k 0"
 OPTS+=" --top-p 1.0"
@@ -106,7 +101,7 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-# Layer mappings: Qwen 24 layers -> GPT2 12 layers
+# Qwen 24 layers -> GPT2-small 12 layers
 OPTS+=" --teacher_layer_mapping 8 16 24"
 OPTS+=" --student_layer_mapping 4 8 12"
 OPTS+=" --split_layer_mapping 0 1 3 3"

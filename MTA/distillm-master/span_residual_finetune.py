@@ -88,22 +88,36 @@ def get_optimizer(args, model):
     while isinstance(model, DDP):
         model = model.module
 
+    # Collect projector param ids BEFORE building main group so we can exclude them.
+    # projectors are registered as nn.Module submodules → they appear in model.parameters()
+    # and would be double-counted if also added to a separate param group.
+    projector_param_ids = set()
+    for attr in ("projectors", "projector_SA", "projector_AS"):
+        m = getattr(model, attr, None)
+        if m is not None:
+            for p in m.parameters():
+                projector_param_ids.add(id(p))
+
     if args.peft is not None:
         param_groups = get_optimizer_params_peft(args, model)
     else:
         param_groups = get_optimizer_params(args, model)
 
-    # Span projectors (same LR as before)
+    # Strip projector params from every main group to avoid double-counting.
+    for group in param_groups:
+        group["params"] = [p for p in group["params"] if id(p) not in projector_param_ids]
+
+    # Span projectors (MTA) — explicit group with lower LR
     if model.projectors is not None:
         param_groups.append({
-            "params": model.projectors.parameters(),
-            "lr": 5e-4
+            "params": list(model.projectors.parameters()),
+            "lr": 5e-4,
         })
-    # Residual projectors P_S->A and P_A->S (learnable, excluded from main group by name)
+    # Residual projectors P_S->A and P_A->S — learnable in Stage 2
     for attr in ("projector_SA", "projector_AS"):
         proj = getattr(model, attr, None)
         if proj is not None:
-            param_groups.append({"params": proj.parameters(), "lr": 5e-4})
+            param_groups.append({"params": list(proj.parameters()), "lr": 5e-4})
 
     optimizer = AdamW(param_groups, lr=args.lr, weight_decay=args.weight_decay)
     print_rank(f'Optimizer = {optimizer.__class__.__name__}')
@@ -612,10 +626,10 @@ def finetune(args, tokenizer, model: deepspeed.DeepSpeedEngine, optimizer: AdamW
         teacher_dataloader = None
         print_rank("Same-tokenizer mode")
 
-    # Residual projector handles
+    # Residual projector handles — all accessed via model.module (the HF model under DS engine)
     projector_TA = getattr(model.module, "projector_TA", None)  # frozen P_T->A
-    projector_SA = getattr(model, "projector_SA", None)          # learnable P_S->A
-    projector_AS = getattr(model, "projector_AS", None)          # learnable P_A->S
+    projector_SA = getattr(model.module, "projector_SA", None)  # learnable P_S->A
+    projector_AS = getattr(model.module, "projector_AS", None)  # learnable P_A->S
     d_A = args.d_bottleneck
 
     step, global_step = 1, 1
@@ -845,9 +859,16 @@ def evaluate(args, tokenizer, model, dataset: LMTrainDataset, split, epoch, devi
     model.eval()
     all_loss = 0.0
     step = 0
-    
+
+    # --eval-gen: generate on ALL dev samples (standalone eval script).
+    # Otherwise: always generate on a small subset so ROUGE-L is shown during training
+    # without the full-generation overhead that slows down later epochs.
+    eval_gen_num = getattr(args, "eval_gen_num", 200)  # default 200 samples for training eval
+    do_full_gen = getattr(args, "eval_gen", False)      # True only when --eval-gen passed
+
     all_response_ids = []
-    
+    gen_sample_count = 0
+
     with torch.no_grad():
         for it, (model_batch, no_model_batch, gen_data) in enumerate(tqdm(dataloader, desc="Evaluating", disable=(dist.get_rank() != 0))):
             print_rank(f"{it}/{len(dataloader)}")
@@ -857,47 +878,46 @@ def evaluate(args, tokenizer, model, dataset: LMTrainDataset, split, epoch, devi
                 raise NotImplementedError
             else:
                 loss = loss_func(logits.view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
-            
-            max_new_tokens = args.max_length - gen_data["input_ids"].size(1)
-            
-            if args.eval_gen:            
+
+            # Generate when: full eval requested OR still within subset quota
+            should_gen = do_full_gen or (gen_sample_count < eval_gen_num)
+            if should_gen:
+                max_new_tokens = max(1, args.max_length - gen_data["input_ids"].size(1))
                 gen_out = model.generate(
                     **gen_data,
                     generation_config=generation_config,
                     max_new_tokens=max_new_tokens)
-                
+
                 full_ids = gen_out.sequences
-                
                 full_ids = F.pad(
                     full_ids,
                     (0, args.max_length - full_ids.shape[1]),
                     value=tokenizer.pad_token_id,
                 )
-                
                 response_ids = full_ids[:, gen_data["input_ids"].size(1):]
                 all_response_ids.append(response_ids)
-                    
+                gen_sample_count += response_ids.size(0)
+
             dist.all_reduce(loss, dist.ReduceOp.SUM, group=dp_group)
             loss = loss / dp_world_size
             all_loss += loss.item()
             step += 1
-    
-    if args.eval_gen:
+
+    if all_response_ids:
         all_response_ids = torch.cat(all_response_ids, dim=0)
         all_response_ids = all_gather(all_response_ids, dim=1, world_size=dp_world_size, group=dp_group, op="stack")
         all_response_ids = all_response_ids.view(-1, all_response_ids.size(-1))
-        
         responses = tokenizer.batch_decode(all_response_ids, skip_special_tokens=True)
-    
+    else:
+        responses = []
+
     if get_rank() == 0:
-        if args.eval_gen:
+        if responses:
             references = dataset.answers
             responses = responses[:len(references)]
-            
             res = compute_metrics(responses, references)
-        
+
             eval_dir = os.path.join(args.save, "eval", str(epoch))
-            print_rank(eval_dir)
             os.makedirs(eval_dir, exist_ok=True)
             with open(os.path.join(eval_dir, "answers.jsonl"), "w") as f:
                 for resp in responses:

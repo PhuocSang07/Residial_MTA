@@ -1,7 +1,7 @@
 #!/bin/bash
-# Setup B — SpanResidual KD: Qwen1.5-1.8B (teacher) -> GPT2-medium 345M (student)
-# Stage 2: span_residual_finetune.py
-# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh
+# Setup B — SpanResidual KD (with MTA): Qwen1.5-1.8B -> GPT2-medium 345M
+# Includes lambda_res warmup fix.
+# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh (v2)
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
@@ -25,26 +25,25 @@ BASE_PATH=./distillm-master
 CKPT_NAME="gpt2-medium"
 CKPT="openai-community/gpt2-medium"
 
-# Teacher
 TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
 TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
-# Stage-1 projector checkpoint (same projector as Setup A — teacher unchanged)
-PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B/projector_best.pt"
+# Same projector as Setup A — teacher unchanged
+PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2/projector_best.pt"
 
-# Data: GPT2-medium uses same GPT2 tokenisation as GPT2-120M
+# GPT2-medium uses same GPT2 tokenisation as GPT2-120M
 STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
 TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-# Paper Stage 2: epochs=10, lr=1e-3, global_batch=128
 BATCH_SIZE=16
 LR=1e-3
 GRAD_ACC=8          # 16 * 8 = 128 global batch
-EVAL_BATCH_SIZE=16  # GPT2-medium larger; smaller eval batch
+EVAL_BATCH_SIZE=16
 EPOCHS=10
-MAX_LENGTH=256      # NOTE: paper uses 512; data pre-tokenised at 256
+MAX_LENGTH=512
 
 LAMBDA_RES=0.5
+LAMBDA_RES_WARMUP=500
 GAMMA_SPAN=1.0
 W_SPAN_LOSS=2.0
 
@@ -64,6 +63,7 @@ OPTS+=" --n-gpu ${GPUS_PER_NODE}"
 OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
 OPTS+=" --d-bottleneck 64"
 OPTS+=" --lambda-res ${LAMBDA_RES}"
+OPTS+=" --lambda-res-warmup-steps ${LAMBDA_RES_WARMUP}"
 OPTS+=" --gamma-span ${GAMMA_SPAN}"
 OPTS+=" --data-dir ${STUDENT_DATA_DIR}"
 OPTS+=" --teacher-data-dir ${TEACHER_DATA_DIR}"
@@ -82,10 +82,9 @@ OPTS+=" --kd-ratio 1.0"
 OPTS+=" --warmup-ratio 0.1"
 OPTS+=" --w-span-loss ${W_SPAN_LOSS}"
 OPTS+=" --max-length ${MAX_LENGTH}"
-OPTS+=" --max-prompt-length 128"
+OPTS+=" --max-prompt-length 256"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
-OPTS+=" --eval-gen"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
 OPTS+=" --log-interval 10"
@@ -94,7 +93,7 @@ OPTS+=" --save ${SAVE_PATH}"
 OPTS+=" --type adaptive-srkl"
 OPTS+=" --seed ${SEED}"
 OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 OPTS+=" --do-sample"
 OPTS+=" --top-k 0"
 OPTS+=" --top-p 1.0"
@@ -105,7 +104,7 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-# Qwen1.5 has 24 layers; GPT2-medium has 24 layers
+# Qwen 24 layers -> GPT2-medium 24 layers (1:1 mapping)
 OPTS+=" --teacher_layer_mapping 8 16 24"
 OPTS+=" --student_layer_mapping 8 16 24"
 OPTS+=" --split_layer_mapping 0 1 3 3"
