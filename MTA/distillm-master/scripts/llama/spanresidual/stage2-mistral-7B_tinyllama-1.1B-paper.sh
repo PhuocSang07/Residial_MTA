@@ -1,14 +1,19 @@
 #!/bin/bash
-# Setup A — SpanResidual KD (with MTA): Qwen1.5-1.8B -> GPT2-120M
-# Includes lambda_res warmup fix.
-# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh (v2)
+# Stage 2 — SpanResidual KD (paper-faithful): Mistral-7B → TinyLLaMA-1.1B
+# SAME-tokenizer: cả 2 đều dùng LLaMA SentencePiece BPE (vocab=32000).
+# → Không cần teacher_data_dir; cross-model attention bị skip tự động.
+# → teacher_wrong = compute_residual_mask (teacher logits so sánh trực tiếp với labels).
+# Note: TinyLLaMA chỉ có bản 1.1B (không có 2.7B chính thức).
+# Teacher: VoCuc/Mistral7B_Dolly_SFT (32L, d_T=4096)
+# Student: TinyLlama/TinyLlama-1.1B-Chat-v1.0 (22L, d_S=2048)
+# Pre-requisite: scripts/pretrain/stage1-mistral-7B-projectors.sh
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
 MASTER_ADDR=localhost
-MASTER_PORT=68$(($RANDOM%90+10))
+MASTER_PORT=72$(($RANDOM%90+10))
 NNODES=1
 NODE_RANK=0
 GPUS_PER_NODE=${#GPUS[@]}
@@ -21,40 +26,40 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-CKPT_NAME="gpt2-base"
-CKPT="openai-community/gpt2"
+CKPT="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+CKPT_NAME="tinyllama-1.1b"
 
-TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
-TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
+TEACHER_CKPT="VoCuc/Mistral7B_Dolly_SFT"
+TEACHER_CKPT_NAME="mistral-7B-dolly-sft"
 
-PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2/projector_best.pt"
+PROJECTOR_PATH="${BASE_PATH}/results/mistral/projectors/spanresidual_mistral7B_v2/projector_best.pt"
 
-STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
-TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
+# Same tokenizer → single data dir, NO teacher_data_dir
+DATA_DIR="${BASE_PATH}/processed_data/dolly/full/mistral/"
 
-BATCH_SIZE=32
-LR=1e-3
-GRAD_ACC=4
+BATCH_SIZE=16
+LR=1e-4
+GRAD_ACC=2 
 EVAL_BATCH_SIZE=32
 EPOCHS=10
-MAX_LENGTH=512
+MAX_LENGTH=256
 
 LAMBDA_RES=0.5
-LAMBDA_RES_WARMUP=500
-GAMMA_SPAN=1.0
-W_SPAN_LOSS=2.0
+LAMBDA_RES_WARMUP=100
+GAMMA_SPAN=0.0
+W_SPAN_LOSS=0.0
 
-SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_setup_A_0.1B_qwen1.8B"
+SAVE_PATH="${BASE_PATH}/results/llama/train/spanresidual_paper_tinyllama-1.1B_mistral-7B"
 SEED=42
 
 OPTS=""
 OPTS+=" --base-path ${BASE_PATH}"
 OPTS+=" --model-path ${CKPT}"
-OPTS+=" --model-type gpt2"
+OPTS+=" --model-type llama"
 OPTS+=" --ckpt-name ${CKPT_NAME}"
 OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
-OPTS+=" --teacher-model-type qwen"
+OPTS+=" --teacher-model-type mistral"
 OPTS+=" --teacher-model-fp16"
 OPTS+=" --n-gpu ${GPUS_PER_NODE}"
 OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
@@ -62,8 +67,8 @@ OPTS+=" --d-bottleneck 64"
 OPTS+=" --lambda-res ${LAMBDA_RES}"
 OPTS+=" --lambda-res-warmup-steps ${LAMBDA_RES_WARMUP}"
 OPTS+=" --gamma-span ${GAMMA_SPAN}"
-OPTS+=" --data-dir ${STUDENT_DATA_DIR}"
-OPTS+=" --teacher-data-dir ${TEACHER_DATA_DIR}"
+OPTS+=" --data-dir ${DATA_DIR}"
+# NO --teacher-data-dir: same tokenizer → same data, no dual dataloader needed
 OPTS+=" --num-workers 1"
 OPTS+=" --dev-num 1000"
 OPTS+=" --lr ${LR}"
@@ -79,11 +84,12 @@ OPTS+=" --kd-ratio 1.0"
 OPTS+=" --warmup-ratio 0.1"
 OPTS+=" --w-span-loss ${W_SPAN_LOSS}"
 OPTS+=" --max-length ${MAX_LENGTH}"
-OPTS+=" --max-prompt-length 256"
+OPTS+=" --max-prompt-length 128"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
+OPTS+=" --eval-gen"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"
@@ -101,9 +107,14 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-# Qwen 24 layers -> GPT2-small 12 layers
-OPTS+=" --teacher_layer_mapping 8 16 24"
-OPTS+=" --student_layer_mapping 4 8 12"
+# LoRA: student 1.1B — reduce trainable params and GPU memory
+OPTS+=" --peft lora"
+OPTS+=" --peft-lora-r 256"
+OPTS+=" --peft-lora-alpha 8"
+OPTS+=" --peft-lora-dropout 0.1"
+# Mistral-7B 32L → TinyLLaMA 22L; anchor at thirds
+OPTS+=" --teacher_layer_mapping 10 21 32"
+OPTS+=" --student_layer_mapping 7 14 22"
 OPTS+=" --split_layer_mapping 0 1 3 3"
 
 export NCCL_DEBUG=""

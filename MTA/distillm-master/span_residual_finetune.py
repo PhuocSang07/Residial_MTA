@@ -687,32 +687,40 @@ def finetune(args, tokenizer, model: deepspeed.DeepSpeedEngine, optimizer: AdamW
                     with torch.no_grad():
                         h_T_A = projector_TA.encode(h_T)  # (B, n_T, d_A) frozen
                     h_S_A = projector_SA(h_S)              # (B, n_S, d_A)
-                    h_T_A_aligned = cross_model_attention(h_S_A, h_T_A.to(h_S_A.dtype))  # (B, n_S, d_A)
+
+                    # Section 3.4: cross-model attention only needed when sequence lengths differ.
+                    if cross_tokenizer:
+                        h_T_A_aligned = cross_model_attention(h_S_A, h_T_A.to(h_S_A.dtype))
+                    else:
+                        h_T_A_aligned = h_T_A.to(h_S_A.dtype)
                     proj_to_S = projector_AS(h_T_A_aligned)  # (B, n_S, d_S)
 
                     resp_mask = (label != -100)
+                    lm_dtype = next(model.module.lm_head.parameters()).dtype
 
-                    # Paper Eq.4: apply correction only where teacher is wrong.
-                    # Same-tokenizer: compare teacher top-1 with student labels directly.
-                    # Cross-tokenizer (n_T != n_S): fall back to full resp_mask since
-                    # token sequences don't align — teacher errors can't be mapped 1-to-1.
-                    n_S = h_S.size(1)
-                    n_T = h_T.size(1)
-                    if n_S == n_T:
+                    # Eq.4 indicator: 1[argmax P_T(x_i|x_:i-1) ≠ x_i]
+                    if not cross_tokenizer:
                         teacher_wrong = compute_residual_mask(
                             teacher_outputs.logits, label, resp_mask)
                     else:
-                        teacher_wrong = resp_mask  # cross-tokenizer fallback
+                        # Cross-tokenizer: teacher logits live in teacher vocab and don't
+                        # align with student labels. Use the projected teacher hidden state
+                        # routed through the student LM head to get a prediction in student
+                        # vocab, then compare with student labels.
+                        with torch.no_grad():
+                            proj_logits = model.module.lm_head(proj_to_S.detach().to(lm_dtype))
+                            teacher_pred = proj_logits.argmax(dim=-1)
+                        teacher_wrong = (teacher_pred != label) & resp_mask
 
+                    # Eq.5: β = sqrt(d_S/d_A) * mean(||h_S|| / ||proj_to_S||).
+                    # Paper formula has no clamp, but with zero-init P_A->S the ratio is
+                    # ill-defined at step 1 (||proj_to_S|| ≈ 0 ⇒ β → ∞).  A loose static
+                    # clamp [0.05, 10.0] keeps β in the empirically observed paper range
+                    # without distorting normal training dynamics.
                     beta = compute_beta_seq(h_S.detach(), proj_to_S.detach(), resp_mask, d_S, d_A)
-                    # Tighten β upper bound during warmup to prevent random projectors
-                    # from producing huge correction vectors early in training.
-                    warmup = args.lambda_res_warmup_steps
-                    beta_max = 1.0 + 9.0 * min(global_step / max(warmup, 1), 1.0)  # 1.0 → 10.0
-                    beta_clamped = beta.clamp(0.05, beta_max)
+                    beta = beta.clamp(0.05, 10.0)
 
-                    h_S_res = h_S - beta_clamped * proj_to_S * teacher_wrong.unsqueeze(-1).float()
-                    lm_dtype = next(model.module.lm_head.parameters()).dtype
+                    h_S_res = h_S - beta * proj_to_S * teacher_wrong.unsqueeze(-1).float()
                     res_logits = model.module.lm_head(h_S_res.to(lm_dtype))
                     res_loss_val = loss_func(res_logits.float().view(-1, res_logits.shape[-1]), label.view(-1))
 
@@ -1031,10 +1039,13 @@ def main():
             nn.Linear(d_S, d_T).to(device)
             for _ in range(len(args.teacher_layer_mapping))
         ])
-        # Residual projectors P_S->A and P_A->S (learnable)
+        # Residual projectors P_S->A and P_A->S (learnable).
+        # Zero-init P_A->S so proj_to_S = 0 at step 1 → h_S_res = h_S → res_loss ≈ lm_loss.
+        # Without this, random init produces huge corrections that explode CE in the first
+        # iterations (proj_to_S is noise, ||proj_to_S|| tiny → β blows up via Eq.5).
         projector_SA = ProjectorSA(d_S, d_A).to(device)
         projector_AS = nn.Linear(d_A, d_S, bias=False).to(device)
-        nn.init.xavier_uniform_(projector_AS.weight)
+        nn.init.zeros_(projector_AS.weight)
     else:
         projector_list = None
         projector_SA = None

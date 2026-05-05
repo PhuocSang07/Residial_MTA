@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup B BASELINE — SpanResidual KD (no MTA): Qwen1.5-1.8B -> GPT2-medium 345M
+# Setup A BASELINE — SpanResidual KD (no MTA): Qwen1.5-1.8B -> GPT2-120M
 # Includes lambda_res warmup to fix early training instability.
 # Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh (v2)
 
@@ -8,7 +8,7 @@ export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
 MASTER_ADDR=localhost
-MASTER_PORT=69$(($RANDOM%90+10))
+MASTER_PORT=68$(($RANDOM%90+10))
 NNODES=1
 NODE_RANK=0
 GPUS_PER_NODE=${#GPUS[@]}
@@ -21,32 +21,30 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-# Student: GPT2-medium (345M, hidden=1024, 24 layers)
-CKPT_NAME="gpt2-medium"
-CKPT="openai-community/gpt2-medium"
+CKPT_NAME="gpt2-base"
+CKPT="openai-community/gpt2"
 
 TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
 TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
-# Same projector as Setup B MTA
 PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2/projector_best.pt"
 
 STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
 TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-BATCH_SIZE=16
-LR=1e-3
-GRAD_ACC=8          # 16 * 8 = 128 global batch
-EVAL_BATCH_SIZE=16
+BATCH_SIZE=32
+LR=1e-4
+GRAD_ACC=1
+EVAL_BATCH_SIZE=32
 EPOCHS=10
-MAX_LENGTH=512
+MAX_LENGTH=256
 
 LAMBDA_RES=0.5
-LAMBDA_RES_WARMUP=500   # ramp 0→0.5 over 500 steps
+LAMBDA_RES_WARMUP=100   # ramp 0→0.5 over 500 steps
 GAMMA_SPAN=0.0
 W_SPAN_LOSS=0.0
 
-SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_B_0.35B_qwen1.8B"
+SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_A_0.1B_qwen1.8B"
 SEED=42
 
 OPTS=""
@@ -81,11 +79,12 @@ OPTS+=" --kd-ratio 1.0"
 OPTS+=" --warmup-ratio 0.1"
 OPTS+=" --w-span-loss ${W_SPAN_LOSS}"
 OPTS+=" --max-length ${MAX_LENGTH}"
-OPTS+=" --max-prompt-length 256"
+OPTS+=" --max-prompt-length 128"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
+OPTS+=" --eval-gen"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"
@@ -103,9 +102,9 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-# Qwen 24 layers -> GPT2-medium 24 layers (1:1 mapping)
+# Qwen 24 layers -> GPT2-small 12 layers
 OPTS+=" --teacher_layer_mapping 8 16 24"
-OPTS+=" --student_layer_mapping 8 16 24"
+OPTS+=" --student_layer_mapping 4 8 12"
 OPTS+=" --split_layer_mapping 0 1 3 3"
 
 export NCCL_DEBUG=""

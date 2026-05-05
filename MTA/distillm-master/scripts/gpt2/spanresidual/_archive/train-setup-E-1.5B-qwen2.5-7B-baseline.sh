@@ -1,7 +1,9 @@
 #!/bin/bash
-# Setup D — SpanResidual KD (with MTA): Mistral-7B-Dolly -> GPT2-120M
-# Includes lambda_res warmup fix.
-# Requires: projector_best.pt from pretrain-mistral7B-projectors.sh
+# Setup E BASELINE — SpanResidual KD (no MTA): Qwen2.5-7B-Dolly -> GPT2-XL (1.5B)
+# Teacher: VoCuc/Qwen2.5-7B-Instruct-Dolly-SFT  (28 layers, d_T=3584)
+# Student: openai-community/gpt2-xl              (48 layers, d_S=1600)
+# GAMMA_SPAN=0 and W_SPAN_LOSS=0 disable the span/MTA loss; pure residual KD.
+# Requires: projector_best.pt from pretrain-qwen2.5-7B-projectors.sh
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
@@ -21,30 +23,30 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-CKPT_NAME="gpt2-base"
-CKPT="openai-community/gpt2"
+CKPT_NAME="gpt2-xl"
+CKPT="openai-community/gpt2-xl"
 
-TEACHER_CKPT="VoCuc/Mistral7B_Dolly_SFT"
-TEACHER_CKPT_NAME="mistral-7B-dolly-sft"
+TEACHER_CKPT="VoCuc/Qwen2.5-7B-Instruct-Dolly-SFT"
+TEACHER_CKPT_NAME="qwen2.5-7B-dolly-sft"
 
-PROJECTOR_PATH="${BASE_PATH}/results/mistral/projectors/spanresidual_mistral7B_v2/projector_best.pt"
+PROJECTOR_PATH="${BASE_PATH}/results/qwen2.5/projectors/spanresidual_qwen2.5-7B/projector_best.pt"
 
 STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
-TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/mistral/"
+TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-BATCH_SIZE=32
+BATCH_SIZE=8
 LR=1e-3
-GRAD_ACC=4
-EVAL_BATCH_SIZE=32
+GRAD_ACC=16
+EVAL_BATCH_SIZE=16
 EPOCHS=10
 MAX_LENGTH=512
 
 LAMBDA_RES=0.5
 LAMBDA_RES_WARMUP=500
-GAMMA_SPAN=1.0
-W_SPAN_LOSS=2.0
+GAMMA_SPAN=0.0
+W_SPAN_LOSS=0.0
 
-SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_setup_D_0.1B_mistral7B"
+SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_E_1.5B_qwen2.5-7B"
 SEED=42
 
 OPTS=""
@@ -54,7 +56,7 @@ OPTS+=" --model-type gpt2"
 OPTS+=" --ckpt-name ${CKPT_NAME}"
 OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
-OPTS+=" --teacher-model-type mistral"
+OPTS+=" --teacher-model-type qwen"
 OPTS+=" --teacher-model-fp16"
 OPTS+=" --n-gpu ${GPUS_PER_NODE}"
 OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
@@ -84,6 +86,7 @@ OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
+OPTS+=" --eval-gen"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"
@@ -101,8 +104,9 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-OPTS+=" --teacher_layer_mapping 10 21 32"
-OPTS+=" --student_layer_mapping 4 8 12"
+# Qwen2.5-7B: 28 layers -> GPT2-XL: 48 layers; anchors at ~1/3, ~2/3, full
+OPTS+=" --teacher_layer_mapping 9 19 28"
+OPTS+=" --student_layer_mapping 16 32 48"
 OPTS+=" --split_layer_mapping 0 1 3 3"
 
 export NCCL_DEBUG=""

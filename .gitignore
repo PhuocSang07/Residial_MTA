@@ -31,6 +31,10 @@ adapter_config.json
 tokenizer_config.json
 generation_config.json
 tokenizer.json
+config.json
+answers.json
+*-mta.sh
+results/
 
 # tools / run artifacts
 .wandb/

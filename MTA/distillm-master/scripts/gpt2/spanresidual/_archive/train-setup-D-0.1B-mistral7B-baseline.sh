@@ -40,7 +40,7 @@ EPOCHS=10
 MAX_LENGTH=512
 
 LAMBDA_RES=0.5
-LAMBDA_RES_WARMUP=500   # ramp 0→0.5 over 500 steps
+LAMBDA_RES_WARMUP=500   
 GAMMA_SPAN=0.0
 W_SPAN_LOSS=0.0
 
@@ -84,6 +84,7 @@ OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
+OPTS+=" --eval-gen"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"

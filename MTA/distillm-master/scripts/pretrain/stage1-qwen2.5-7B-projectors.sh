@@ -1,8 +1,9 @@
 #!/bin/bash
-# Stage 1 — Projector pretraining: P_T->A and P_A->T for Mixtral-8x7B-Instruct teacher.
-# Teacher hidden size: d_T=4096, bottleneck d_A=64.
-# Paper: On et al. ICLR 2026 — Stage 1: epochs=10, lr=1e-3, wd=1e-4, cosine.
-# Requires: processed_data/dolly/full/mixtral/ (run process_data_dolly_mixtral.sh first)
+# Stage 1 — Projector pretraining for Qwen2.5-7B-Instruct-Dolly-SFT teacher.
+# d_T=3584 (Qwen2.5-7B hidden size), d_bottleneck=64.
+# Data: processed_data/dolly/full/qwen/ (Qwen-tokenised Dolly, uint32).
+# Teacher is frozen throughout; only P_{T->A} and P_{A->T} are trained.
+# Output: ${SAVE_PATH}/projector_best.pt  (used by Stage-2 spanresidual training)
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
@@ -22,27 +23,25 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-# Teacher: Mixtral-8x7B-Instruct (d_T=4096, 32 layers)
-TEACHER_CKPT="mistralai/Mixtral-8x7B-Instruct-v0.1"
-TEACHER_CKPT_NAME="mixtral-8x7B-instruct"
+TEACHER_CKPT="VoCuc/Qwen2.5-7B-Instruct-Dolly-SFT"
+TEACHER_CKPT_NAME="qwen2.5-7B-dolly-sft"
 
-# Data: Mixtral-tokenised Dolly
-DATA_DIR="${BASE_PATH}/processed_data/dolly/full/mixtral/"
+# Qwen2.5 uses the same tiktoken-based tokenizer family as Qwen1.5 (vocab=151936).
+DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-# Paper Stage 1 hyperparameters
-BATCH_SIZE=8           # reduced from 16 (Mixtral activations are much larger)
-EVAL_BATCH_SIZE=8
-GRAD_ACC=2             # effective 16
-D_BOTTLENECK=64        # anchor dim d_A (paper)
+BATCH_SIZE=32
+EVAL_BATCH_SIZE=64
+GRAD_ACC=1
+D_BOTTLENECK=64
 PROJECTOR_EPOCHS=10
 PROJECTOR_LR=1e-3
 
-SAVE_PATH="${BASE_PATH}/results/mixtral/projectors/spanresidual_mixtral8x7B"
+SAVE_PATH="${BASE_PATH}/results/qwen2.5/projectors/spanresidual_qwen2.5-7B"
 SEED=42
 
 OPTS=""
 OPTS+=" --model-path ${TEACHER_CKPT}"
-OPTS+=" --model-type mistral"
+OPTS+=" --model-type qwen"
 OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
 OPTS+=" --teacher-model-fp16"
@@ -65,8 +64,8 @@ OPTS+=" --clip-grad 1.0"
 OPTS+=" --lr-decay-style cosine"
 OPTS+=" --warmup-iters 0"
 OPTS+=" --lr-min 1e-6"
-OPTS+=" --max-length 256"
-OPTS+=" --max-prompt-length 128"
+OPTS+=" --max-length 512"
+OPTS+=" --max-prompt-length 256"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --type projector-pretrain"
@@ -77,7 +76,7 @@ OPTS+=" --log-interval 50"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --seed ${SEED}"
 OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 
 export NCCL_DEBUG=""
 export WANDB_DISABLED=True

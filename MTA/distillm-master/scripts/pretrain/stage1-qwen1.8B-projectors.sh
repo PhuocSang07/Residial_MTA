@@ -27,14 +27,14 @@ TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
 DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-BATCH_SIZE=64
+BATCH_SIZE=32
 EVAL_BATCH_SIZE=64
 GRAD_ACC=1
 D_BOTTLENECK=64
 PROJECTOR_EPOCHS=10
-PROJECTOR_LR=1e-3
+PROJECTOR_LR=1e-3   
 
-SAVE_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2"
+SAVE_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_paper"
 SEED=42
 
 OPTS=""
@@ -62,8 +62,8 @@ OPTS+=" --clip-grad 1.0"
 OPTS+=" --lr-decay-style cosine"
 OPTS+=" --warmup-iters 0"
 OPTS+=" --lr-min 1e-6"
-OPTS+=" --max-length 512"
-OPTS+=" --max-prompt-length 256"
+OPTS+=" --max-length 256"
+OPTS+=" --max-prompt-length 128"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
 OPTS+=" --type projector-pretrain"

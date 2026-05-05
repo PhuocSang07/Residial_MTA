@@ -94,7 +94,9 @@ def pretrain(args, projector_engine, dataset, device, teacher):
 
             # ProjectorTA: P_T->A -> P_A->T
             _z, h_recon = projector_engine(h_T)              # (B, L, d_T)
-            # Paper Eq.3: CE over ALL positions (prompt + response), ignore only padding.
+            # Paper Eq.3: CE summed over ALL positions i (prompt + response), only padding ignored.
+            # Restricting to response tokens shrinks signal too much (~50 vs ~256 tokens/sample
+            # on Dolly) and causes the projector to overfit.
             logits = lm_head(h_recon.to(teacher_dtype))      # (B, L, V_T)
             input_ids  = model_batch["input_ids"]             # (B, L)
             attn_mask  = model_batch["attention_mask"]        # (B, L) 1=real 0=pad

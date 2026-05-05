@@ -1,15 +1,14 @@
 #!/bin/bash
-# Setup C BASELINE — SpanResidual KD (no MTA): Mixtral-8x7B-Instruct -> GPT2-120M
-# Loss: L = (1 - lambda_res)*L_SFT + lambda_res*L_res   (gamma_span=0)
-# Paper Table 4: cross-tokenizer, On et al. ICLR 2026
-# Requires: projector_latest.pt from pretrain-mixtral8x7B-projectors.sh
+# Setup B BASELINE — SpanResidual KD (no MTA): Qwen1.5-1.8B -> GPT2-medium 345M
+# Includes lambda_res warmup to fix early training instability.
+# Requires: projector_best.pt from pretrain-qwen1.8B-projectors.sh (v2)
 
 GPUS=(0)
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 export TOKENIZERS_PARALLELISM=false
 
 MASTER_ADDR=localhost
-MASTER_PORT=68$(($RANDOM%90+10))
+MASTER_PORT=69$(($RANDOM%90+10))
 NNODES=1
 NODE_RANK=0
 GPUS_PER_NODE=${#GPUS[@]}
@@ -22,34 +21,32 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 BASE_PATH=./distillm-master
 
-# Student: GPT2-120M (d_S=768, 12 layers)
-CKPT_NAME="gpt2-base"
-CKPT="openai-community/gpt2"
+# Student: GPT2-medium (345M, hidden=1024, 24 layers)
+CKPT_NAME="gpt2-medium"
+CKPT="openai-community/gpt2-medium"
 
-# Teacher: Mixtral-8x7B-Instruct (d_T=4096, 32 layers)
-TEACHER_CKPT="mistralai/Mixtral-8x7B-Instruct-v0.1"
-TEACHER_CKPT_NAME="mixtral-8x7B-instruct"
+TEACHER_CKPT="VoCuc/Qwen1.5_1.8B_SFT_Dolly"
+TEACHER_CKPT_NAME="qwen1.5-1.8B-sft-dolly"
 
-# Stage-1 projector checkpoint (P_T->A: 4096->64)
-PROJECTOR_PATH="${BASE_PATH}/results/mixtral/projectors/spanresidual_mixtral8x7B/projector_latest.pt"
+# Same projector as Setup B MTA
+PROJECTOR_PATH="${BASE_PATH}/results/qwen/projectors/spanresidual_qwen1.8B_v2/projector_best.pt"
 
-# Data (cross-tokenizer: student uses GPT2 tokens, teacher uses Mixtral tokens)
 STUDENT_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/gpt2/"
-TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/mixtral/"
+TEACHER_DATA_DIR="${BASE_PATH}/processed_data/dolly/full/qwen/"
 
-# Paper Stage 2 hyperparameters (On et al. ICLR 2026)
 BATCH_SIZE=16
-LR=1e-3
-GRAD_ACC=8          # 16 * 8 = 128 global batch (matches paper)
-EVAL_BATCH_SIZE=16
+LR=1e-4
+GRAD_ACC=1
+EVAL_BATCH_SIZE=32
 EPOCHS=10
 MAX_LENGTH=256
 
 LAMBDA_RES=0.5
-GAMMA_SPAN=0.0      # baseline: no span supervision
+LAMBDA_RES_WARMUP=500   # ramp 0→0.5 over 500 steps
+GAMMA_SPAN=0.0
 W_SPAN_LOSS=0.0
 
-SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_C_0.1B_mixtral8x7B"
+SAVE_PATH="${BASE_PATH}/results/gpt2/train/spanresidual_baseline_B_0.35B_qwen1.8B"
 SEED=42
 
 OPTS=""
@@ -59,12 +56,13 @@ OPTS+=" --model-type gpt2"
 OPTS+=" --ckpt-name ${CKPT_NAME}"
 OPTS+=" --teacher-model-path ${TEACHER_CKPT}"
 OPTS+=" --teacher-ckpt-name ${TEACHER_CKPT_NAME}"
-OPTS+=" --teacher-model-type mistral"
+OPTS+=" --teacher-model-type qwen"
 OPTS+=" --teacher-model-fp16"
 OPTS+=" --n-gpu ${GPUS_PER_NODE}"
 OPTS+=" --projector-load-path ${PROJECTOR_PATH}"
 OPTS+=" --d-bottleneck 64"
 OPTS+=" --lambda-res ${LAMBDA_RES}"
+OPTS+=" --lambda-res-warmup-steps ${LAMBDA_RES_WARMUP}"
 OPTS+=" --gamma-span ${GAMMA_SPAN}"
 OPTS+=" --data-dir ${STUDENT_DATA_DIR}"
 OPTS+=" --teacher-data-dir ${TEACHER_DATA_DIR}"
@@ -86,16 +84,16 @@ OPTS+=" --max-length ${MAX_LENGTH}"
 OPTS+=" --max-prompt-length 128"
 OPTS+=" --do-train"
 OPTS+=" --do-valid"
-OPTS+=" --eval-gen"
 OPTS+=" --save-interval -1"
 OPTS+=" --eval-interval -1"
+OPTS+=" --eval-gen"
 OPTS+=" --log-interval 10"
 OPTS+=" --mid-log-num -1"
 OPTS+=" --save ${SAVE_PATH}"
 OPTS+=" --type adaptive-srkl"
 OPTS+=" --seed ${SEED}"
 OPTS+=" --deepspeed"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_bf16.json"
 OPTS+=" --do-sample"
 OPTS+=" --top-k 0"
 OPTS+=" --top-p 1.0"
@@ -106,10 +104,9 @@ OPTS+=" --init-threshold 0.0"
 OPTS+=" --loss-eps 0.1"
 OPTS+=" --capacity 1000"
 OPTS+=" --student-gen"
-# Layer mappings: Mixtral 32 layers -> GPT2 12 layers
-# Map teacher layers {10, 21, 32} to student {4, 8, 12}
-OPTS+=" --teacher_layer_mapping 10 21 32"
-OPTS+=" --student_layer_mapping 4 8 12"
+# Qwen 24 layers -> GPT2-medium 24 layers (1:1 mapping)
+OPTS+=" --teacher_layer_mapping 8 16 24"
+OPTS+=" --student_layer_mapping 8 16 24"
 OPTS+=" --split_layer_mapping 0 1 3 3"
 
 export NCCL_DEBUG=""
