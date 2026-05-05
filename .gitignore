@@ -35,7 +35,8 @@ config.json
 answers.json
 *-mta.sh
 results/
-
+plans/
+.vscode/
 # tools / run artifacts
 .wandb/
 wandb/
